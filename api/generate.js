@@ -8,46 +8,19 @@ const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-const MAX_INPUT_BYTES = 10 * 1024 * 1024;
-
-/* =========================
-   CORS
-========================= */
-
-function setCors(res) {
-  res.setHeader(
-    "Access-Control-Allow-Origin",
-    "*"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Methods",
-    "POST, OPTIONS"
-  );
-
-  res.setHeader(
-    "Access-Control-Allow-Headers",
-    "Content-Type"
-  );
+function cors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 }
 
-/* =========================
-   JSON RESPONSE
-========================= */
-
-function sendJSON(res, status, data) {
-  setCors(res);
-  res.status(status).json(data);
+function json(res, status, data) {
+  cors(res);
+  return res.status(status).json(data);
 }
 
-/* =========================
-   BODY
-========================= */
-
-function getBody(req) {
-  if (!req.body) {
-    return {};
-  }
+function body(req) {
+  if (!req.body) return {};
 
   if (typeof req.body === "string") {
     try {
@@ -60,63 +33,14 @@ function getBody(req) {
   return req.body;
 }
 
-/* =========================
-   DATA URL
-========================= */
-
-function cleanDataUrl(value) {
-  if (!value || typeof value !== "string") {
-    return null;
-  }
-
-  if (!value.startsWith("data:image/")) {
-    return null;
-  }
-
-  return value;
-}
-
-function getBase64FromDataUrl(dataUrl) {
-  const comma = dataUrl.indexOf(",");
-
-  if (comma === -1) {
-    throw new Error("Invalid image data.");
-  }
-
-  return Buffer.from(
-    dataUrl.slice(comma + 1),
-    "base64"
-  );
-}
-
-/* =========================
-   WEBP OPTIMIZATION
-   Target: 40–50 KB
-========================= */
-
-async function makeWebP40to50KB(buffer) {
-
-  const qualities = [
-    80,
-    70,
-    60,
-    50,
-    45,
-    40,
-    35,
-    30,
-    25,
-    20
-  ];
-
+async function compressWebP(buffer) {
   let best = null;
 
-  for (const quality of qualities) {
+  for (let quality = 80; quality >= 20; quality -= 5) {
 
     const output = await sharp(buffer)
       .resize(1024, 1024, {
-        fit: "cover",
-        position: "centre"
+        fit: "cover"
       })
       .webp({
         quality,
@@ -124,335 +48,193 @@ async function makeWebP40to50KB(buffer) {
       })
       .toBuffer();
 
-    const kb =
-      output.length / 1024;
+    const kb = output.length / 1024;
 
-    /*
-      Perfect target
-      40–50 KB
-    */
-
-    if (kb >= 40 && kb <= 50) {
-      return {
-        buffer: output,
-        quality,
-        sizeKB: Math.round(kb)
+    if (
+      !best ||
+      Math.abs(kb - 45) <
+      Math.abs(best.kb - 45)
+    ) {
+      best = {
+        output,
+        kb,
+        quality
       };
     }
 
-    /*
-      Keep closest result
-    */
-
-    if (!best) {
-      best = {
-        buffer: output,
-        quality,
-        sizeKB: kb
-      };
-    } else {
-
-      const currentDistance =
-        Math.abs(kb - 45);
-
-      const bestDistance =
-        Math.abs(best.sizeKB - 45);
-
-      if (currentDistance < bestDistance) {
-        best = {
-          buffer: output,
-          quality,
-          sizeKB: kb
-        };
-      }
+    if (kb >= 40 && kb <= 50) {
+      break;
     }
   }
 
-  return {
-    buffer: best.buffer,
-    quality: best.quality,
-    sizeKB: Math.round(best.sizeKB)
-  };
+  return best;
 }
-
-/* =========================
-   API HANDLER
-========================= */
 
 export default async function handler(req, res) {
 
-  setCors(res);
-
-  /*
-    Browser preflight
-  */
+  cors(res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
   }
 
-  /*
-    POST only
-  */
-
   if (req.method !== "POST") {
-    return sendJSON(res, 405, {
+    return json(res, 405, {
       success: false,
-      error: "Only POST requests are allowed."
+      error: "POST required"
     });
   }
 
   try {
 
-    /* =========================
-       API KEY CHECK
-    ========================= */
-
     if (!process.env.OPENAI_API_KEY) {
-
-      return sendJSON(res, 500, {
+      return json(res, 500, {
         success: false,
-        error:
-          "OPENAI_API_KEY is not configured in Vercel."
+        error: "OPENAI_API_KEY missing"
       });
     }
 
-    /* =========================
-       BODY
-    ========================= */
-
-    const body = getBody(req);
+    const data = body(req);
 
     const productName =
-      body.productName || "Jyoti Special";
+      data.productName || "Masala Khakhra";
 
     const weight =
-      body.weight || "";
+      data.weight || "500 gm";
 
     const price =
-      body.price || "";
+      data.price || "₹160";
 
     const occasion =
-      body.occasion || "";
+      data.occasion || "";
 
     const tagline =
-      body.tagline ||
+      data.tagline ||
       "Crispy • Fresh • Homemade Taste";
 
-    const customPrompt =
-      body.prompt || "";
+    const prompt = `
 
-    /* =========================
-       PRODUCT IMAGE
-    ========================= */
+Create a premium Indian food marketing poster.
 
-    const productImage =
-      cleanDataUrl(
-        body.image ||
-        body.imageData ||
-        body.productImage
-      );
-
-    let inputImageBuffer = null;
-
-    if (productImage) {
-
-      inputImageBuffer =
-        getBase64FromDataUrl(
-          productImage
-        );
-
-      if (
-        inputImageBuffer.length >
-        MAX_INPUT_BYTES
-      ) {
-
-        return sendJSON(res, 413, {
-          success: false,
-          error:
-            "Product image is too large. Please use an image below 10 MB."
-        });
-      }
-    }
-
-    /* =========================
-       AI PROMPT
-    ========================= */
-
-    const finalPrompt = `
-
-Create a premium Indian food advertising poster.
-
-BRAND:
+Brand:
 JYOTI GRUH UDHYOG
 
-LOCATION:
+Location:
 RAJKOT
 
-PHONE:
+Phone:
 9712149344
 
-PRODUCT:
+Product:
 ${productName}
 
-PACK SIZE:
+Pack Size:
 ${weight}
 
-PRICE:
+Price:
 ${price}
 
-OCCASION:
+Occasion:
 ${occasion}
 
-TAGLINE:
+Tagline:
 ${tagline}
 
-DESIGN STYLE:
+STYLE:
 
-Premium Golden Brown food brand.
+Premium Gujarati Indian food brand.
 
-Use:
-- Deep chocolate brown
-- Warm golden brown
-- Elegant cream
-- Subtle gold foil
-- Premium studio lighting
-- Luxury Indian food advertisement
-- Clean composition
-- High-end commercial poster
-- Realistic food photography
-- Embossed premium typography
-- Elegant shadows
-- Professional packaging advertisement
+Golden brown.
+Deep chocolate brown.
+Cream background.
+Luxury food photography.
+Elegant gold accents.
+Premium embossed typography.
+Clean commercial advertisement.
+Professional social media design.
+Warm studio lighting.
+Realistic food presentation.
 
 IMPORTANT:
 
-The supplied product photograph is the reference.
+Do not invent another brand.
+Do not invent another phone number.
+Do not invent another price.
+Do not add watermark.
+Do not add unrelated products.
 
-Keep the actual product recognizable.
+Make the product name prominent.
 
-Do NOT replace the product with an unrelated product.
+Create a beautiful square Instagram advertisement.
 
-Do NOT invent another brand.
-
-Do NOT invent another phone number.
-
-Do NOT invent another price.
-
-Do NOT add a watermark.
-
-Make the product the main hero.
-
-Create a premium social-media-ready square advertisement.
-
-Canvas:
+Final image:
 1024 x 1024 pixels.
-
-${customPrompt}
 
 `;
 
-    /* =========================
-       OPENAI REQUEST
-    ========================= */
+    console.log("Starting OpenAI image generation...");
 
-    const request = {
+    const result = await client.images.generate({
       model: "gpt-image-1",
-      prompt: finalPrompt,
+      prompt,
       size: "1024x1024",
       output_format: "webp",
       output_compression: 80
-    };
+    });
 
-    /*
-      If product photo exists,
-      send it as image input.
-    */
+    console.log("OpenAI response received");
 
-    if (productImage) {
+    const image = result?.data?.[0];
 
-      request.image = [
-        {
-          image_url: productImage
-        }
-      ];
-    }
-
-    /* =========================
-       GENERATE
-    ========================= */
-
-    const result =
-      await client.images.generate(
-        request
-      );
-
-    const first =
-      result?.data?.[0];
-
-    if (!first) {
+    if (!image) {
       throw new Error(
-        "OpenAI did not return an image."
+        "OpenAI returned no image"
       );
     }
 
-    /* =========================
-       GET IMAGE BUFFER
-    ========================= */
+    let buffer;
 
-    let generatedBuffer;
+    if (image.b64_json) {
 
-    if (first.b64_json) {
+      buffer = Buffer.from(
+        image.b64_json,
+        "base64"
+      );
 
-      generatedBuffer =
-        Buffer.from(
-          first.b64_json,
-          "base64"
-        );
+    } else if (image.url) {
 
-    } else if (first.url) {
+      const r = await fetch(image.url);
 
-      const response =
-        await fetch(first.url);
-
-      if (!response.ok) {
-
+      if (!r.ok) {
         throw new Error(
-          "Unable to download generated image."
+          "Generated image download failed"
         );
       }
 
-      generatedBuffer =
-        Buffer.from(
-          await response.arrayBuffer()
-        );
+      buffer = Buffer.from(
+        await r.arrayBuffer()
+      );
 
     } else {
 
       throw new Error(
-        "No image data returned by OpenAI."
+        "No image data returned"
       );
     }
 
-    /* =========================
-       FINAL WEBP
-    ========================= */
-
     const optimized =
-      await makeWebP40to50KB(
-        generatedBuffer
-      );
+      await compressWebP(buffer);
 
     const base64 =
-      optimized.buffer.toString(
-        "base64"
-      );
+      optimized.output.toString("base64");
 
-    /* =========================
-       SUCCESS
-    ========================= */
+    console.log(
+      "Final image:",
+      optimized.kb,
+      "KB"
+    );
 
-    return sendJSON(res, 200, {
+    return json(res, 200, {
 
       success: true,
 
@@ -463,30 +245,31 @@ ${customPrompt}
       format: "webp",
 
       size_kb:
-        optimized.sizeKB,
+        Math.round(optimized.kb),
 
       quality:
         optimized.quality,
 
       image_url:
-        `data:image/webp;base64,${base64}`
+        "data:image/webp;base64," +
+        base64
 
     });
 
   } catch (error) {
 
     console.error(
-      "Jyoti AI Generate Error:",
+      "GENERATE ERROR:",
       error
     );
 
-    return sendJSON(res, 500, {
+    return json(res, 500, {
 
       success: false,
 
       error:
         error?.message ||
-        "AI image generation failed."
+        "Generation failed"
 
     });
   }
