@@ -1,8 +1,13 @@
 {
-  "name":"jyoti-ai-image-api",
-  "private":true,
-  "version":"1.0.0",
-  "type":"module",
-  "engines":{"node":">=20"},
-  "dependencies":{"@vercel/node":"latest"}
+  "name": "jyoti-ai-image-api",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@vercel/node": "latest",
+    "sharp": "latest"
+  }
 }
