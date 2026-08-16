@@ -1,106 +1,316 @@
-// Vercel Serverless Function
-// Secure AI image generation/editing endpoint for Jyoti AI Marketing.
-// Set OPENAI_API_KEY in Vercel Environment Variables.
-// Never put the API key in app.js or GitHub.
+import { createRequire } from "module";
+import OpenAI from "openai";
+
+const require = createRequire(import.meta.url);
+const sharp = require("sharp");
+
+const client = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
+
+const MAX_INPUT_BYTES = 10 * 1024 * 1024;
+
+function sendJSON(res, status, data) {
+  res.status(status).json(data);
+}
+
+function getBody(req) {
+  if (!req.body) return {};
+
+  if (typeof req.body === "string") {
+    try {
+      return JSON.parse(req.body);
+    } catch {
+      return {};
+    }
+  }
+
+  return req.body;
+}
+
+function cleanDataUrl(value) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+
+  if (value.startsWith("data:image/")) {
+    return value;
+  }
+
+  return null;
+}
+
+function getBase64FromDataUrl(dataUrl) {
+  const comma = dataUrl.indexOf(",");
+
+  if (comma === -1) {
+    throw new Error("Invalid image data.");
+  }
+
+  return Buffer.from(
+    dataUrl.slice(comma + 1),
+    "base64"
+  );
+}
+
+async function makeWebP50KB(buffer) {
+  let quality = 82;
+
+  let output = await sharp(buffer)
+    .resize(1024, 1024, {
+      fit: "cover",
+      position: "centre"
+    })
+    .webp({
+      quality,
+      effort: 6
+    })
+    .toBuffer();
+
+  while (output.length > 50 * 1024 && quality > 25) {
+    quality -= 7;
+
+    output = await sharp(buffer)
+      .resize(1024, 1024, {
+        fit: "cover",
+        position: "centre"
+      })
+      .webp({
+        quality,
+        effort: 6
+      })
+      .toBuffer();
+  }
+
+  return {
+    buffer: output,
+    quality
+  };
+}
 
 export default async function handler(req, res) {
-  const allowedOrigin = "https://jaydipraithatha10.github.io";
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
-  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  if (req.method === "OPTIONS") return res.status(204).end();
-  if (req.method !== "POST") return res.status(405).json({ error: "POST only" });
+  if (req.method !== "POST") {
+    return sendJSON(res, 405, {
+      error: "Only POST requests are allowed."
+    });
+  }
 
   try {
+
+    const body = getBody(req);
+
+    const prompt =
+      body.prompt ||
+      "Create a premium Jyoti Gruh Udhyog food marketing poster.";
+
+    const productImage =
+      cleanDataUrl(
+        body.image ||
+        body.imageData ||
+        body.productImage
+      );
+
+    const productName =
+      body.productName ||
+      "";
+
+    const weight =
+      body.weight ||
+      "";
+
+    const price =
+      body.price ||
+      "";
+
+    const occasion =
+      body.occasion ||
+      "";
+
     if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: "OPENAI_API_KEY is not configured on the server." });
-    }
-
-    const body = req.body || {};
-    const imageDataUrl = body.image;
-    const product = String(body.product || "Product");
-    const weight = String(body.weight || "");
-    const price = String(body.price || "");
-    const tagline = String(body.tagline || "");
-    const occasion = String(body.occasion || "");
-    const format = String(body.format || "square");
-
-    if (!imageDataUrl || !imageDataUrl.startsWith("data:image/")) {
-      return res.status(400).json({ error: "Please upload a product image." });
-    }
-
-    const match = imageDataUrl.match(/^data:(image\/(?:png|jpeg|jpg|webp));base64,(.+)$/i);
-    if (!match) return res.status(400).json({ error: "Unsupported image format." });
-
-    const mime = match[1].toLowerCase() === "image/jpg" ? "image/jpeg" : match[1];
-    const buffer = Buffer.from(match[2], "base64");
-
-    // Keep uploads reasonably small for a static-site workflow.
-    if (buffer.length > 10 * 1024 * 1024) {
-      return res.status(413).json({ error: "Image is too large. Please use an image under 10 MB." });
-    }
-
-    const size = format === "square" ? "1024x1024" : "1024x1536";
-
-    const prompt = `
-Create a premium food-product marketing creative for Jyoti Gruh Udhyog, Rajkot, India.
-Use the uploaded product photo as the primary product and preserve its identity, packaging, colors and shape.
-Brand style: luxurious Golden Brown, warm cream, rich chocolate brown, subtle gold accents.
-Add elegant embossed/raised-looking typography and premium Indian food-brand styling.
-Product: ${product}
-Weight: ${weight}
-Price: ${price}
-Tagline: ${tagline}
-Occasion: ${occasion || "Everyday premium product promotion"}
-Format: ${format}
-
-IMPORTANT:
-- Make the product the hero.
-- Keep the design clean, premium and suitable for WhatsApp/Instagram.
-- Do not invent a different product or change the packaging.
-- Do not invent claims, ingredients, certifications or prices.
-- Keep clear space for final branding text.
-- Do not rely on generated text for exact price/phone details; the website will overlay those precisely after generation.
-`;
-
-    const form = new FormData();
-    form.append("model", "gpt-image-1");
-    form.append("image[]", new Blob([buffer], { type: mime }), "product.png");
-    form.append("prompt", prompt);
-    form.append("size", size);
-    form.append("quality", "medium");
-    form.append("output_format", "png");
-
-    const response = await fetch("https://api.openai.com/v1/images/edits", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: form
-    });
-
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({
-        error: data?.error?.message || "OpenAI image generation failed."
+      return sendJSON(res, 500, {
+        error: "OPENAI_API_KEY is not configured."
       });
     }
 
-    const b64 = data?.data?.[0]?.b64_json;
-    if (!b64) {
-      return res.status(502).json({ error: "No image was returned by the image API." });
+    let finalPrompt = `
+Create ONE premium square advertising poster.
+
+Brand:
+JYOTI GRUH UDHYOG
+RAJKOT
+
+Contact:
+9712149344
+
+Product:
+${productName}
+
+Pack size:
+${weight}
+
+Price:
+${price}
+
+Occasion:
+${occasion}
+
+Design direction:
+
+- Premium Golden Brown and Deep Chocolate Brown palette.
+- Luxury Indian food brand aesthetic.
+- Product must remain the hero.
+- Use the supplied product photo as the visual reference.
+- Do not replace the actual product with an unrelated product.
+- Elegant warm studio lighting.
+- Premium realistic food photography.
+- Sophisticated composition.
+- Clean commercial advertising layout.
+- Embossed / raised 3D typography appearance.
+- Subtle gold-foil effect.
+- Premium Gujarati-friendly typography.
+- High-end social media advertisement.
+- No watermark.
+- No unrelated brands.
+- Do not invent another phone number.
+- Do not invent another price.
+- Do not invent another product.
+
+Important:
+The final image must be exactly 1024 x 1024 pixels.
+
+Marketing brief:
+${prompt}
+`;
+
+    const imageRequest = {
+      model: "gpt-image-2",
+      prompt: finalPrompt,
+      size: "1024x1024",
+      output_format: "webp",
+      output_compression: 80
+    };
+
+    if (productImage) {
+
+      const imageBuffer =
+        getBase64FromDataUrl(productImage);
+
+      if (imageBuffer.length > MAX_INPUT_BYTES) {
+        return sendJSON(res, 413, {
+          error: "Product image is too large."
+        });
+      }
+
+      imageRequest.image = [
+        {
+          image: productImage
+        }
+      ];
     }
 
-    return res.status(200).json({
-      image: `data:image/png;base64,${b64}`,
-      format,
-      product,
-      phone: "9712149344"
+    const result =
+      await client.images.generate(
+        imageRequest
+      );
+
+    const first =
+      result?.data?.[0];
+
+    if (!first) {
+      throw new Error(
+        "OpenAI did not return an image."
+      );
+    }
+
+    let generatedBuffer;
+
+    if (first.b64_json) {
+
+      generatedBuffer =
+        Buffer.from(
+          first.b64_json,
+          "base64"
+        );
+
+    } else if (first.url) {
+
+      const response =
+        await fetch(first.url);
+
+      if (!response.ok) {
+        throw new Error(
+          "Unable to download generated image."
+        );
+      }
+
+      generatedBuffer =
+        Buffer.from(
+          await response.arrayBuffer()
+        );
+
+    } else {
+
+      throw new Error(
+        "No image data returned by OpenAI."
+      );
+    }
+
+    /*
+      Final processing:
+      Always force 1024x1024 WebP.
+      Then compress toward 40–50 KB.
+    */
+
+    const optimized =
+      await makeWebP50KB(
+        generatedBuffer
+      );
+
+    const base64 =
+      optimized.buffer.toString(
+        "base64"
+      );
+
+    const finalSizeKB =
+      Math.round(
+        optimized.buffer.length / 1024
+      );
+
+    return sendJSON(res, 200, {
+
+      success: true,
+
+      width: 1024,
+
+      height: 1024,
+
+      format: "webp",
+
+      size_kb: finalSizeKB,
+
+      quality: optimized.quality,
+
+      image_url:
+        `data:image/webp;base64,${base64}`
+
     });
+
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ error: "Server error while generating the image." });
+
+    console.error(
+      "Jyoti AI Image Error:",
+      error
+    );
+
+    return sendJSON(res, 500, {
+
+      success: false,
+
+      error:
+        error?.message ||
+        "Image generation failed."
+
+    });
   }
 }
