@@ -1,17 +1,20 @@
 import OpenAI from "openai";
 
-const client = new OpenAI({
+const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-function cors(res) {
+function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type"
+  );
 }
 
 export default async function handler(req, res) {
-  cors(res);
+  setCors(res);
 
   if (req.method === "OPTIONS") {
     return res.status(200).end();
@@ -28,14 +31,17 @@ export default async function handler(req, res) {
     if (!process.env.OPENAI_API_KEY) {
       return res.status(500).json({
         success: false,
-        error: "OPENAI_API_KEY missing in Vercel Environment Variables"
+        error: "OPENAI_API_KEY is missing"
       });
     }
 
-    const data =
-      typeof req.body === "string"
-        ? JSON.parse(req.body)
-        : (req.body || {});
+    let data = req.body;
+
+    if (typeof data === "string") {
+      data = JSON.parse(data);
+    }
+
+    data = data || {};
 
     const productName =
       data.productName || "Masala Khakhra";
@@ -54,68 +60,76 @@ export default async function handler(req, res) {
       "Crispy • Fresh • Homemade Taste";
 
     const prompt = `
-Create a premium square Indian food marketing poster.
+Create ONE premium Indian food advertising poster.
 
-Brand:
+BRAND:
 JYOTI GRUH UDHYOG
 
-Location:
+LOCATION:
 RAJKOT
 
-Phone:
+PHONE:
 9712149344
 
-Product:
+PRODUCT:
 ${productName}
 
-Pack Size:
+PACK SIZE:
 ${weight}
 
-Price:
+PRICE:
 ${price}
 
-Occasion:
+OCCASION:
 ${occasion}
 
-Tagline:
+TAGLINE:
 ${tagline}
 
-Design:
-Premium Golden Brown and Deep Chocolate Brown.
+STYLE:
+Premium Gujarati Indian food brand.
+Golden brown.
+Deep chocolate brown.
 Cream background.
-Luxury Indian food brand.
-Elegant gold accents.
-Premium realistic food presentation.
+Luxury Indian food photography.
 Warm studio lighting.
+Elegant gold accents.
+Premium embossed typography.
 Clean commercial advertising layout.
-Embossed premium typography.
-High-end social media advertisement.
+Professional social media advertisement.
 
-Important:
+IMPORTANT:
+Use the exact product information supplied above.
 Do not invent another brand.
 Do not invent another phone number.
 Do not invent another price.
 Do not add unrelated products.
-No watermark.
+Do not add watermark.
 
-Create a beautiful professional 1024 x 1024 square poster.
+Create a beautiful square 1024 x 1024 advertising poster.
 `;
 
-    console.log("Starting OpenAI...");
+    console.log("JYOTI: Calling OpenAI");
 
-    const result = await client.images.generate({
+    const result = await openai.images.generate({
       model: "gpt-image-1",
       prompt: prompt,
       size: "1024x1024"
     });
 
-    console.log("OpenAI completed");
+    console.log("JYOTI: OpenAI response received");
 
-    const image = result?.data?.[0];
-
-    if (!image) {
-      throw new Error("OpenAI returned no image");
+    if (
+      !result ||
+      !result.data ||
+      !result.data.length
+    ) {
+      throw new Error(
+        "OpenAI returned no image"
+      );
     }
+
+    const image = result.data[0];
 
     if (image.b64_json) {
       return res.status(200).json({
@@ -139,16 +153,21 @@ Create a beautiful professional 1024 x 1024 square poster.
       });
     }
 
-    throw new Error("No image data returned by OpenAI");
+    throw new Error(
+      "OpenAI returned image without URL or base64 data"
+    );
 
   } catch (error) {
-    console.error("GENERATE ERROR:", error);
+    console.error(
+      "JYOTI GENERATE ERROR:",
+      error
+    );
 
     return res.status(500).json({
       success: false,
       error:
         error?.message ||
-        "Image generation failed"
+        String(error)
     });
   }
 }
